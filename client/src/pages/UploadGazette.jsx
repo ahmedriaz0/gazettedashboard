@@ -72,28 +72,37 @@ export default function UploadGazette() {
           setStageText(`Uploading PDF (${percent}%)... (${(event.loaded / (1024 * 1024)).toFixed(1)} MB / ${(event.total / (1024 * 1024)).toFixed(1)} MB)`);
         } else {
           setCurrentStep('parsing');
-          setStageText("Upload complete! Extracting text and parsing pages with Poppler layout engine...");
+          setStageText("Upload received! Server is queuing the parse job...");
         }
       }
     };
 
+    // The upload endpoint responds as soon as the file is saved and a
+    // background job is queued (202 + job_id) — it does NOT wait for
+    // parsing to finish. That's what keeps this working for 4,000+ page
+    // gazettes on a hosted server: parsing can take minutes, and no
+    // single HTTP request is left open that long for a host's proxy or
+    // health checks to kill. Progress after this point comes from
+    // polling /api/upload-status/{job_id}.
     xhr.onload = () => {
-      setLoading(false);
+      let data;
       try {
-        const data = JSON.parse(xhr.responseText);
-        if (xhr.status >= 200 && xhr.status < 300) {
-          setCurrentStep('complete');
-          setIsError(false);
-          setStatusMsg(`Success! Processed ${data.total_pages} pages and inserted ${data.records_inserted} student records into Supabase.`);
-        } else {
-          setCurrentStep('error');
-          setIsError(true);
-          setStatusMsg(`Error: ${typeof data.detail === "object" ? JSON.stringify(data.detail) : (data.detail || "Upload failed")}`);
-        }
+        data = JSON.parse(xhr.responseText);
       } catch (err) {
+        setLoading(false);
         setCurrentStep('error');
         setIsError(true);
         setStatusMsg("Error parsing server response: " + xhr.responseText);
+        return;
+      }
+
+      if (xhr.status >= 200 && xhr.status < 300 && data.job_id) {
+        pollJobStatus(data.job_id);
+      } else {
+        setLoading(false);
+        setCurrentStep('error');
+        setIsError(true);
+        setStatusMsg(`Error: ${typeof data.detail === "object" ? JSON.stringify(data.detail) : (data.detail || "Upload failed")}`);
       }
     };
 
@@ -105,6 +114,68 @@ export default function UploadGazette() {
     };
 
     xhr.send(formData);
+  };
+
+  const pollJobStatus = (jobId) => {
+    const POLL_INTERVAL_MS = 1500;
+    let consecutiveFailures = 0;
+
+    const tick = async () => {
+      let res;
+      try {
+        res = await fetch(`${API_BASE_URL}/api/upload-status/${jobId}`);
+      } catch (err) {
+        consecutiveFailures += 1;
+        if (consecutiveFailures >= 5) {
+          setLoading(false);
+          setCurrentStep('error');
+          setIsError(true);
+          setStatusMsg("Lost connection to the backend server while checking parse progress.");
+          return;
+        }
+        setTimeout(tick, POLL_INTERVAL_MS);
+        return;
+      }
+
+      if (!res.ok) {
+        setLoading(false);
+        setCurrentStep('error');
+        setIsError(true);
+        setStatusMsg(res.status === 404
+          ? "Job not found (server may have restarted mid-parse). Please retry the upload."
+          : `Error checking parse progress (HTTP ${res.status}).`);
+        return;
+      }
+
+      consecutiveFailures = 0;
+      const job = await res.json();
+
+      if (job.status === "queued" || job.status === "parsing") {
+        setCurrentStep('parsing');
+        if (job.total_pages) {
+          setStageText(`Parsing page ${job.processed_pages}/${job.total_pages} (${job.records_found} records found so far)...`);
+        } else {
+          setStageText("Reading PDF page count...");
+        }
+        setTimeout(tick, POLL_INTERVAL_MS);
+      } else if (job.status === "saving") {
+        setCurrentStep('saving');
+        setStageText(`Saving ${job.records_found} records to Supabase (${job.records_inserted} inserted so far)...`);
+        setTimeout(tick, POLL_INTERVAL_MS);
+      } else if (job.status === "complete") {
+        setLoading(false);
+        setCurrentStep('complete');
+        setIsError(false);
+        setStatusMsg(`Success! Processed ${job.total_pages} pages and inserted ${job.records_inserted} student records into Supabase.`);
+      } else if (job.status === "error") {
+        setLoading(false);
+        setCurrentStep('error');
+        setIsError(true);
+        setStatusMsg(`Error: ${job.error || "Upload failed"}`);
+      }
+    };
+
+    tick();
   };
 
   return (

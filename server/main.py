@@ -1,6 +1,9 @@
 import os
 import shutil
 import subprocess
+import time
+import uuid
+import asyncio
 from datetime import datetime, timezone
 from typing import Optional
 from fastapi import FastAPI, File, Form, UploadFile, HTTPException, Query
@@ -27,6 +30,37 @@ TABLE_NAME = "student_results"
 
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "temp_uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+# -------------------------------------------------------------
+# IN-MEMORY JOB STORE
+# -------------------------------------------------------------
+# Parsing a 4,000+ page gazette can take minutes. Doing that inline inside
+# a single HTTP request handler blocks the asyncio event loop (nothing else
+# can be served, including the host's health checks) and holds one HTTP
+# connection open far longer than most hosts/proxies (Render, Vercel,
+# browsers) allow before silently killing it. That's what "stuck at
+# parsing" in production was: the connection got cut with no response ever
+# reaching the client, even though the server might still be working.
+#
+# Fix: the upload endpoint just saves the file, spawns a background job,
+# and returns a job_id immediately. The real work runs in a worker thread
+# (asyncio.to_thread) so it never blocks the event loop, and the frontend
+# polls /api/upload-status/{job_id} for progress instead of keeping one
+# long request open.
+#
+# NOTE: this is in-memory and per-process — jobs are lost if the server
+# restarts mid-parse, and this won't work correctly across multiple
+# replicas/workers. Fine for a single-instance deployment; swap for
+# Redis/DB-backed job storage if you scale out.
+JOBS: dict[str, dict] = {}
+JOB_MAX_AGE_SECONDS = 3600
+
+
+def _prune_old_jobs():
+    cutoff = time.time() - JOB_MAX_AGE_SECONDS
+    stale_ids = [jid for jid, j in JOBS.items() if j.get("created_at", 0) < cutoff and j["status"] in ("complete", "error")]
+    for jid in stale_ids:
+        JOBS.pop(jid, None)
 
 # -------------------------------------------------------------
 # POPPLER BINARY PATH CONFIGURATION
@@ -111,26 +145,21 @@ def _page_marker_present(page_marker, text: str) -> bool:
 
 
 # -------------------------------------------------------------
-# 1. PDF UPLOAD & PARSER ENDPOINT
+# 1. PDF UPLOAD & PARSER ENDPOINT (background job + polling)
 # -------------------------------------------------------------
-@app.post("/api/upload-and-parse")
-async def upload_and_parse_gazette(
-    file: UploadFile = File(...),
-    board: str = Form(...),
-    class_num: int = Form(...),
-    year: int = Form(...),
-):
-    temp_file_path = os.path.join(UPLOAD_DIR, file.filename)
-    with open(temp_file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-
-    config = None  # so the finally block can check config.get("cleanup_fn")
-                    # even if resolve_board() itself somehow raised
+def _run_parse_job_sync(job_id: str, temp_file_path: str, board: str, class_num: int, year: int):
+    """Runs entirely inside a worker thread (via asyncio.to_thread) so it
+    never blocks the event loop. Owns the full lifecycle of the job: status
+    transitions, progress updates, error capture, and temp-file cleanup."""
+    job = JOBS[job_id]
+    config = None
     try:
         normalized_board, config = resolve_board(board)
         compiled_re = config.get("pattern")
 
         total_pages = get_page_count(temp_file_path)
+        job["total_pages"] = total_pages
+        job["status"] = "parsing"
         print(f"[*] Total Pages to Process: {total_pages} (board={normalized_board})")
 
         records = []
@@ -200,10 +229,13 @@ async def upload_and_parse_gazette(
                 page_records = future.result()
                 records.extend(page_records)
                 processed_pages += 1
+                job["processed_pages"] = processed_pages
+                job["records_found"] = len(records)
                 if processed_pages % 200 == 0:
                     print(f"Processed {processed_pages}/{total_pages} pages... ({len(records)} records extracted)")
 
         print(f"[*] Uploading {len(records)} records to Supabase...")
+        job["status"] = "saving"
 
         batch_size = 500
         inserted_count = 0
@@ -211,17 +243,15 @@ async def upload_and_parse_gazette(
             batch = records[i:i + batch_size]
             supabase.table(TABLE_NAME).insert(batch).execute()
             inserted_count += len(batch)
+            job["records_inserted"] = inserted_count
 
-        return {
-            "status": "success",
-            "board_matched": normalized_board,
-            "total_pages": total_pages,
-            "records_inserted": inserted_count
-        }
+        job["status"] = "complete"
+        job["board_matched"] = normalized_board
 
     except Exception as e:
         print(f"[X] Processing error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        job["status"] = "error"
+        job["error"] = str(e)
     finally:
         # Boards that hold a file handle open across the whole upload
         # (currently only sahiwal.py, via PyMuPDF) need to release it
@@ -234,17 +264,57 @@ async def upload_and_parse_gazette(
             except Exception as cleanup_err:
                 print(f"[!] cleanup_fn failed (non-fatal): {cleanup_err}")
 
-        # Deliberately non-fatal: extraction + Supabase insert already
-        # succeeded by this point (that happens earlier, inside the try
-        # block, before `return`). A leftover temp file is a minor
-        # annoyance to clean up manually later; raising here instead
-        # would turn an already-successful upload into a reported 500,
-        # which is exactly what was happening before this fix.
         try:
             if os.path.exists(temp_file_path):
                 os.remove(temp_file_path)
         except Exception as remove_err:
             print(f"[!] Could not remove temp file {temp_file_path} (non-fatal): {remove_err}")
+
+
+@app.post("/api/upload-and-parse", status_code=202)
+async def upload_and_parse_gazette(
+    file: UploadFile = File(...),
+    board: str = Form(...),
+    class_num: int = Form(...),
+    year: int = Form(...),
+):
+    temp_file_path = os.path.join(UPLOAD_DIR, f"{uuid.uuid4().hex}_{file.filename}")
+
+    def _save():
+        with open(temp_file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+
+    await asyncio.to_thread(_save)
+
+    _prune_old_jobs()
+    job_id = uuid.uuid4().hex
+    JOBS[job_id] = {
+        "status": "queued",
+        "total_pages": None,
+        "processed_pages": 0,
+        "records_found": 0,
+        "records_inserted": 0,
+        "board_matched": None,
+        "error": None,
+        "created_at": time.time(),
+    }
+
+    asyncio.create_task(
+        asyncio.to_thread(_run_parse_job_sync, job_id, temp_file_path, board, class_num, year)
+    )
+
+    return {"job_id": job_id}
+
+
+# -------------------------------------------------------------
+# 1b. UPLOAD JOB STATUS (polling endpoint for the above)
+# -------------------------------------------------------------
+@app.get("/api/upload-status/{job_id}")
+async def get_upload_status(job_id: str):
+    job = JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Unknown or expired job_id")
+    return job
 
 
 # -------------------------------------------------------------
