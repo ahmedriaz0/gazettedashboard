@@ -31,6 +31,17 @@ TABLE_NAME = "student_results"
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "temp_uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
+# Each unit of "parallelism" here is a whole extra `pdftotext` subprocess.
+# 16 was tuned against a real multi-core dev machine; on a host that only
+# gets a FRACTION of a shared vCPU (e.g. Render's Free/Starter tiers),
+# os.cpu_count() still reports the host's full core count (cgroup CPU
+# quotas don't change it), so it can't be auto-detected reliably here —
+# 16-way spawning on a throttled CPU thrashes instead of parallelizing,
+# which is slower than fewer workers would be. Tune via env var on Render
+# without a redeploy; try 2, 4, 8 and see what's actually fastest for
+# your plan/region.
+PARSE_MAX_WORKERS = int(os.environ.get("PARSE_MAX_WORKERS", "4"))
+
 # -------------------------------------------------------------
 # IN-MEMORY JOB STORE
 # -------------------------------------------------------------
@@ -223,7 +234,7 @@ def _run_parse_job_sync(job_id: str, temp_file_path: str, board: str, class_num:
         import concurrent.futures
 
         processed_pages = 0
-        with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=PARSE_MAX_WORKERS) as executor:
             future_to_page = {executor.submit(process_page, p): p for p in range(1, total_pages + 1)}
             for future in concurrent.futures.as_completed(future_to_page):
                 page_records = future.result()
