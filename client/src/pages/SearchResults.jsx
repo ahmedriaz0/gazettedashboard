@@ -53,58 +53,49 @@ export default function SearchResults() {
 
   const fetchResults = async (page = 1) => {
     setLoading(true);
-    const from = (page - 1) * PAGE_SIZE;
-    const to = from + PAGE_SIZE - 1;
+    const offset = (page - 1) * PAGE_SIZE;
 
-    let query = supabase.from('student_results').select('*', { count: 'exact' });
-
-    if (rollNumber.trim()) query = query.eq('roll_number', parseInt(rollNumber.trim(), 10));
-    if (name.trim()) query = query.ilike('name', `%${name.trim()}%`);
-    if (board.trim()) query = query.ilike('board', `%${board.trim()}%`);
-    if (year) query = query.eq('year', parseInt(year, 10));
-    if (classNum) query = query.eq('class', parseInt(classNum, 10));
-    if (minMarks !== '') query = query.gte('marks', Math.max(0, parseInt(minMarks, 10)));
-    if (maxMarks !== '') query = query.lte('marks', Math.max(0, parseInt(maxMarks, 10)));
-
-    query = query.range(from, to).order('roll_number', { ascending: true });
-
-    const { data, count, error } = await query;
+    // Ranking (exact match > starts-with > contains) has to happen in the
+    // database, before LIMIT/OFFSET — a client-side sort can only reorder
+    // the one page of rows that already came back, so an exact match
+    // outside that page would never surface. See supabase/sql/search_students.sql.
+    const { data, error } = await supabase.rpc('search_students', {
+      p_roll_number: rollNumber.trim() ? parseInt(rollNumber.trim(), 10) : null,
+      p_name: name.trim() || null,
+      p_board: board.trim() || null,
+      p_class: classNum ? parseInt(classNum, 10) : null,
+      p_year: year ? parseInt(year, 10) : null,
+      p_min_marks: minMarks !== '' ? Math.max(0, parseInt(minMarks, 10)) : null,
+      p_max_marks: maxMarks !== '' ? Math.max(0, parseInt(maxMarks, 10)) : null,
+      p_limit: PAGE_SIZE,
+      p_offset: offset,
+    });
 
     if (error) {
       alert("Error fetching records: " + error.message);
-    } else {
-      let sortedData = data || [];
-      if (name.trim()) {
-        const queryTerm = name.trim().toLowerCase();
-        sortedData = [...sortedData].sort((a, b) => {
-          const nameA = (a.name || '').toLowerCase();
-          const nameB = (b.name || '').toLowerCase();
-          const aStartsWith = nameA.startsWith(queryTerm);
-          const bStartsWith = nameB.startsWith(queryTerm);
+      setLoading(false);
+      return;
+    }
 
-          if (aStartsWith && !bStartsWith) return -1;
-          if (!aStartsWith && bStartsWith) return 1;
-          return nameA.localeCompare(nameB);
+    const rows = (data || []).map((row) => row.record);
+    const total = data && data.length > 0 ? Number(data[0].total_count) : 0;
+
+    setResults(rows);
+    setTotalCount(total);
+    setCurrentPage(page);
+
+    if (rows.length > 0) {
+      const validMarks = rows.map((r) => r.marks).filter((m) => typeof m === 'number');
+      if (validMarks.length > 0) {
+        const sum = validMarks.reduce((acc, val) => acc + val, 0);
+        setStats({
+          avg: Math.round(sum / validMarks.length),
+          max: Math.max(...validMarks),
+          min: Math.min(...validMarks),
         });
       }
-
-      setResults(sortedData);
-      setTotalCount(count || 0);
-      setCurrentPage(page);
-
-      if (sortedData.length > 0) {
-        const validMarks = sortedData.map((r) => r.marks).filter((m) => typeof m === 'number');
-        if (validMarks.length > 0) {
-          const sum = validMarks.reduce((acc, val) => acc + val, 0);
-          setStats({
-            avg: Math.round(sum / validMarks.length),
-            max: Math.max(...validMarks),
-            min: Math.min(...validMarks),
-          });
-        }
-      } else {
-        setStats({ avg: 0, max: 0, min: 0 });
-      }
+    } else {
+      setStats({ avg: 0, max: 0, min: 0 });
     }
     setLoading(false);
   };
