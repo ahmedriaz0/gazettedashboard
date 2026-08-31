@@ -35,7 +35,7 @@ That's it. main.py's upload/search endpoints never need to change —
 only process_page()'s hook-dispatch logic does, and only if a genuinely
 new KIND of quirk shows up (not for every new board).
 """
-from . import lahore, faisalabad, bahawalpur, dgkhan, sargodha, rawalpindi, sahiwal, gujranwala, generic
+from . import lahore, faisalabad, bahawalpur, dgkhan, sargodha, rawalpindi, sahiwal, gujranwala, multan, generic
 
 # Every board module lives here. Order doesn't matter.
 BOARD_MODULES = {
@@ -47,6 +47,7 @@ BOARD_MODULES = {
     "Rawalpindi": rawalpindi.BOARD_CONFIG,
     "Sahiwal": sahiwal.BOARD_CONFIG,
     "Gujranwala": gujranwala.BOARD_CONFIG,
+    "Multan": multan.BOARD_CONFIG,
 }
 
 GENERIC_CONFIG = generic.BOARD_CONFIG
