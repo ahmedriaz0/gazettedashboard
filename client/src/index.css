@@ -1,1 +1,41 @@
 @import "tailwindcss";
+
+@theme {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+
+  --color-bg: #ffffff;
+  --color-surface: #ffffff;
+  --color-surface-muted: #fafafa;
+  --color-border: #e2e2e2;
+  --color-border-strong: #0a0a0a;
+
+  --color-ink: #0a0a0a;
+  --color-ink-muted: #6b6b6b;
+  --color-ink-faint: #9c9c9c;
+
+  --color-danger: #b91c1c;
+  --color-danger-bg: #fef2f2;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  background: var(--color-bg);
+}
+
+body {
+  color: var(--color-ink);
+  font-feature-settings: "tnum" 1;
+}
+
+::selection {
+  background: var(--color-ink);
+  color: var(--color-bg);
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-ink);
+  outline-offset: 2px;
+}

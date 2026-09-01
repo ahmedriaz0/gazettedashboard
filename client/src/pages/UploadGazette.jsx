@@ -13,11 +13,17 @@ const PUNJAB_BOARDS = [
   'FBISE Federal'
 ];
 
+const STAGES = [
+  { id: 'uploading', label: 'File Transfer' },
+  { id: 'parsing', label: 'Layout Parsing' },
+  { id: 'saving', label: 'Database Sync' },
+];
+
 export default function UploadGazette() {
   const [file, setFile] = useState(null);
   const [board, setBoard] = useState("BISE Lahore");
   const [classNum, setClassNum] = useState(10);
-  
+
   // Dynamic Year Dropdown setup
   const currentYear = new Date().getFullYear();
   const yearsList = [];
@@ -178,22 +184,24 @@ export default function UploadGazette() {
     tick();
   };
 
+  const stageIndex = STAGES.findIndex((s) => s.id === currentStep);
+
   return (
-    <div className="max-w-4xl mx-auto bg-white rounded-xl shadow-sm border border-slate-200 p-6 md:p-8">
-      <div className="mb-6">
-        <h2 className="text-2xl font-bold text-slate-800 tracking-tight">
+    <div className="mx-auto max-w-4xl border border-border bg-surface p-5 sm:p-8">
+      <div className="mb-6 border-b border-border pb-4">
+        <h2 className="text-xl font-semibold tracking-tight text-ink sm:text-2xl">
           Upload Board Gazette
         </h2>
-        <p className="text-slate-500 text-sm mt-1">
+        <p className="mt-1 text-sm text-ink-muted">
           Select the target board and metadata. The parser will extract tabular text layout and save valid records to Supabase.
         </p>
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-6">
         {/* File Selection Box */}
-        <div className="p-4 bg-slate-50 border border-slate-200 rounded-lg">
-          <label className="block text-sm font-semibold text-slate-700 mb-2">
-            1. Gazette PDF File:
+        <div className="border border-border bg-bg p-4">
+          <label className="mb-2 block text-xs font-medium uppercase tracking-wide text-ink-muted">
+            1. Gazette PDF File
           </label>
           <input
             type="file"
@@ -206,26 +214,26 @@ export default function UploadGazette() {
             }}
             required
             disabled={loading}
-            className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 disabled:opacity-50 cursor-pointer"
+            className="block w-full text-sm text-ink-muted file:mr-4 file:border file:border-border-strong file:bg-bg file:px-4 file:py-2 file:text-xs file:font-medium file:text-ink hover:file:bg-surface-muted disabled:opacity-50 cursor-pointer"
           />
           {file && (
-            <p className="mt-2 text-xs text-slate-500 font-medium">
-              Selected: <span className="text-slate-800 font-semibold">{file.name}</span> ({(file.size / (1024 * 1024)).toFixed(2)} MB)
+            <p className="mt-2 text-xs text-ink-muted">
+              Selected: <span className="font-medium text-ink">{file.name}</span> ({(file.size / (1024 * 1024)).toFixed(2)} MB)
             </p>
           )}
         </div>
 
         {/* 3-Column Dropdowns */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <div>
-            <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
+            <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-ink-muted">
               Board
             </label>
             <select
               value={board}
               onChange={(e) => setBoard(e.target.value)}
               disabled={loading}
-              className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition disabled:opacity-50"
+              className={inputClass}
             >
               {PUNJAB_BOARDS.map((b) => (
                 <option key={b} value={b}>{b}</option>
@@ -234,14 +242,14 @@ export default function UploadGazette() {
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
+            <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-ink-muted">
               Class
             </label>
             <select
               value={classNum}
               onChange={(e) => setClassNum(Number(e.target.value))}
               disabled={loading}
-              className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition disabled:opacity-50"
+              className={inputClass}
             >
               <option value={9}>9th Class (SSC-I)</option>
               <option value={10}>10th Class (SSC-II)</option>
@@ -251,14 +259,14 @@ export default function UploadGazette() {
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
+            <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-ink-muted">
               Year
             </label>
             <select
               value={year}
               onChange={(e) => setYear(Number(e.target.value))}
               disabled={loading}
-              className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition disabled:opacity-50"
+              className={inputClass}
             >
               {yearsList.map((y) => (
                 <option key={y} value={y}>{y}</option>
@@ -268,83 +276,84 @@ export default function UploadGazette() {
         </div>
 
         {/* Field Selection Box */}
-        <fieldset className="border border-slate-200 rounded-lg p-4 bg-slate-50/50">
-          <legend className="px-2 text-xs font-bold text-slate-500 uppercase tracking-wider">
+        <fieldset className="border border-border bg-bg p-4">
+          <legend className="px-1 text-xs font-medium uppercase tracking-wide text-ink-muted">
             2. Fields Present in this PDF
           </legend>
-          <div className="space-y-2 mt-1">
-            <label className="flex items-center gap-2 text-sm text-slate-700">
+          <div className="mt-1 space-y-2">
+            <label className="flex items-center gap-2 text-sm text-ink-muted">
               <input
                 type="checkbox"
                 checked
                 disabled
-                className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-not-allowed"
+                className="h-4 w-4 accent-ink cursor-not-allowed"
               />
-              <span><strong className="font-semibold text-slate-900">Roll / Code Number & Marks</strong> (Mandatory)</span>
+              <span><strong className="font-medium text-ink">Roll / Code Number & Marks</strong> (Mandatory)</span>
             </label>
 
-            <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+            <label className="flex cursor-pointer items-center gap-2 text-sm text-ink-muted">
               <input
                 type="checkbox"
                 checked={includeName}
                 onChange={(e) => setIncludeName(e.target.checked)}
                 disabled={loading}
-                className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 disabled:opacity-50"
+                className="h-4 w-4 accent-ink disabled:opacity-50"
               />
-              <span><strong className="font-semibold text-slate-900">Student Name</strong></span>
+              <span><strong className="font-medium text-ink">Student Name</strong></span>
             </label>
 
-            <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+            <label className="flex cursor-pointer items-center gap-2 text-sm text-ink-muted">
               <input
                 type="checkbox"
                 checked={includeGroup}
                 onChange={(e) => setIncludeGroup(e.target.checked)}
                 disabled={loading}
-                className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 disabled:opacity-50"
+                className="h-4 w-4 accent-ink disabled:opacity-50"
               />
-              <span><strong className="font-semibold text-slate-900">Group</strong> (e.g. Science / Arts)</span>
+              <span><strong className="font-medium text-ink">Group</strong> (e.g. Science / Arts)</span>
             </label>
           </div>
         </fieldset>
 
         {/* Multi-Step Real-Time Status Progress Indicator */}
         {loading && (
-          <div className="space-y-4 bg-slate-50 p-4 rounded-xl border border-slate-200">
-            {/* Step Badges */}
-            <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-semibold border-b border-slate-200 pb-3">
-              <div className={`flex items-center gap-1.5 ${currentStep === 'uploading' ? 'text-blue-600' : 'text-slate-400'}`}>
-                <span className={`w-2 h-2 rounded-full ${currentStep === 'uploading' ? 'bg-blue-600 animate-pulse' : 'bg-emerald-500'}`} />
-                1. File Transfer
-              </div>
-              <span className="text-slate-300">→</span>
-              <div className={`flex items-center gap-1.5 ${currentStep === 'parsing' ? 'text-blue-600 font-bold' : 'text-slate-400'}`}>
-                <span className={`w-2 h-2 rounded-full ${currentStep === 'parsing' ? 'bg-blue-600 animate-pulse' : currentStep === 'complete' ? 'bg-emerald-500' : 'bg-slate-300'}`} />
-                2. Layout Parsing
-              </div>
-              <span className="text-slate-300">→</span>
-              <div className={`flex items-center gap-1.5 ${currentStep === 'saving' ? 'text-blue-600 font-bold' : 'text-slate-400'}`}>
-                <span className={`w-2 h-2 rounded-full ${currentStep === 'complete' ? 'bg-emerald-500' : 'bg-slate-300'}`} />
-                3. Supabase Database Sync
-              </div>
+          <div className="space-y-4 border border-border bg-bg p-4">
+            {/* Step List */}
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border pb-3 text-xs font-medium">
+              {STAGES.map((stage, i) => {
+                const state = i < stageIndex ? 'done' : i === stageIndex ? 'active' : 'pending';
+                return (
+                  <div key={stage.id} className="flex items-center gap-1.5">
+                    <span
+                      className={`h-2 w-2 rounded-full ${
+                        state === 'pending' ? 'bg-border' : 'bg-ink'
+                      }`}
+                    />
+                    <span className={state === 'pending' ? 'text-ink-faint' : 'text-ink'}>
+                      {i + 1}. {stage.label}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
 
             {/* Stage Description & Percentage Bar */}
             <div className="space-y-1.5">
-              <div className="flex justify-between text-xs text-slate-700 font-medium">
+              <div className="flex justify-between text-xs text-ink-muted">
                 <span>{stageText}</span>
-                {currentStep === 'uploading' && <span className="font-bold text-slate-900">{uploadProgress}%</span>}
+                {currentStep === 'uploading' && <span className="font-semibold text-ink">{uploadProgress}%</span>}
               </div>
 
               {currentStep === 'uploading' ? (
-                <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden">
+                <div className="h-1.5 w-full overflow-hidden bg-border">
                   <div
-                    className="h-full bg-blue-600 transition-all duration-200"
+                    className="h-full bg-ink transition-all duration-200"
                     style={{ width: `${uploadProgress}%` }}
                   />
                 </div>
               ) : (
-                <div className="w-full h-2 bg-blue-100 rounded-full overflow-hidden relative">
-                  <div className="h-full bg-blue-600 w-1/3 animate-pulse rounded-full" />
+                <div className="relative h-1.5 w-full overflow-hidden bg-border">
+                  <div className="h-full w-1/3 animate-pulse bg-ink" />
                 </div>
               )}
             </div>
@@ -355,10 +364,10 @@ export default function UploadGazette() {
         <button
           type="submit"
           disabled={loading}
-          className="w-full py-2.5 px-4 bg-blue-600 text-white font-semibold rounded-lg shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 transition flex items-center justify-center gap-2"
+          className="flex w-full items-center justify-center gap-2 bg-ink px-4 py-2.5 text-sm font-medium text-bg transition-opacity hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {loading && (
-            <svg className="animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <svg className="h-4 w-4 animate-spin text-bg" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
               <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
             </svg>
@@ -370,10 +379,10 @@ export default function UploadGazette() {
       {/* Final Status Message Badge */}
       {statusMsg && (
         <div
-          className={`mt-6 p-4 rounded-lg text-sm border ${
+          className={`mt-6 border p-4 text-sm ${
             isError
-              ? 'bg-rose-50 border-rose-200 text-rose-800'
-              : 'bg-emerald-50 border-emerald-200 text-emerald-800'
+              ? 'border-danger/40 bg-danger-bg text-danger'
+              : 'border-border-strong bg-bg text-ink'
           }`}
         >
           <strong className="font-semibold">Status:</strong> {statusMsg}
@@ -382,3 +391,6 @@ export default function UploadGazette() {
     </div>
   );
 }
+
+const inputClass =
+  'w-full border border-border bg-bg px-3 py-2 text-sm text-ink transition-colors focus:border-border-strong focus:outline-none disabled:opacity-50';
