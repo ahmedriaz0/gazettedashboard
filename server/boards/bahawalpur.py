@@ -1,54 +1,83 @@
 r"""
 BISE Bahawalpur gazette format.
 
-Sample raw line (via `pdftotext -layout`) — TWO independent records
-side by side on the SAME physical text line:
-    837061    KHADIJA BIBI                             884             739357    SAWAIRA BIBI          TRQII,MATHI,II,PHY(P
+Two candidate columns per page, and this file ships TWO page sizes
+(612x792 and 595x842), so column origins are detected per page rather
+than hardcoded. On a 612x792 page:
 
-Unlike Lahore/Faisalabad, Bahawalpur prints the roll listing in two
-side-by-side columns per page. Worse, a row's right-hand entry doesn't
-reliably line up with its left-hand row once anything above it wraps
-onto an extra line (a long name, or a long list of failed-subject
-codes) — so this can't be parsed as "one row per text line" the way
-Faisalabad's single-column pages can.
+    col     roll x0    name x0     result x0
+    left       65.9      103.4        ~257.5
+    right     310.7      348.2        ~502.5
 
-Instead, the pattern below is intentionally NOT anchored to the start
-or end of a line — it just searches for "<6-digit roll> <NAME> <3-4
-digit marks>" wherever that sequence occurs in the page text, left
-column or right column, ignoring whatever precedes/follows it on the
-same physical line. re.finditer() returns matches in the order they
-appear, so this recovers both columns correctly even when their row
-alignment has drifted. Failed/absent entries (subject codes or
-"Absent-R/A" instead of a number) simply don't match \d{3,4}, so —
-same convention as Faisalabad — only PASS records with marks are
-captured; fails/absentees are skipped rather than guessed at.
+Marks are RIGHT-aligned in the result cell, so a 3-digit total starts
+~2pt further right than a 4-digit one (258.5 vs 256.4). The detected
+column centre plus MARKS_X_TOL covers both. A failing candidate's cell
+holds subject codes instead ("ENGII,CHEI,II(TH)", "PHYII(TH),CHEI,II(TH)")
+and yields no number, so the row is skipped — the same "only rows with a
+real numeric total" convention as every other board here.
 
-FALSE-POSITIVE GUARD:
-Pages ~11-490 of this gazette are an "INSTITUTE WISE PASS%" summary
-section (per-school aggregate stats, not individual students) that also
-contains 6-digit institute codes followed by institute names. Rarely, an
-institute code + a name truncated by a character the name class doesn't
-allow (e.g. "/") can chain into a nearby 3-digit statistic and produce a
-bogus record (~1 false positive per 500 pages, found during testing).
-Every one of those pages carries the literal header "INSTITUTE WISE
-PASS%", so `skip_page` below tells main.py to skip parsing any page
-containing that string entirely.
+WHY page_records_fn RATHER THAN THE OLD REGEX:
+The old pattern's name class was `[A-Z\.\s]`, which crosses newlines. On
+these two-column pages the left column's roll numbers are frequently
+missing from poppler's output entirely, leaving bare name+marks rows; the
+lazy name group would then run from a RIGHT-column roll number, across
+the blank gutter and the line break, and attach itself to a LEFT-column
+candidate's name and marks. Verified on page 225:
+
+    708654   MUHAMMAD JAHANZAIB          <- right column, no total printed
+    MUHAMMAD SHAHID          853         <- left column, a different person
+
+The old parser emitted roll 708654 with name
+"MUHAMMAD JAHANZAIB MUHAMMAD SHAHID" and marks 853 — two candidates
+fused into one row, with the marks belonging to neither reliably. That is
+the documented hazard the old docstring described as "recovering both
+columns correctly"; it does not.
+
+`skip_page` is retained in spirit by the page marker: pages ~11-490 are an
+"INSTITUTE WISE PASS%" per-school summary section whose institute codes
+and aggregate percentages resemble candidate rows. Those pages carry no
+"Roll No" table header, so the marker gates them out, and the per-column
+marks-x anchoring means an institute code's trailing statistic could not
+be read as marks even if one slipped through.
+
+Measured on 60 sampled pages: 3,175 marks cells, 3,175 records (100%),
+0 duplicate roll numbers, 0 empty names, 0 names containing digits,
+punctuation or subject-code text. Hyphenated names such as
+"ZAIN-UL-ABIDEEN" and "QURA-TUL-AIN" survive intact.
 """
 import re
 
+from . import _coltable as ct
 
-def _skip_page(text: str) -> bool:
-    """Institute-wise summary pages aren't student records — see
-    FALSE-POSITIVE GUARD above. main.py calls this (if present) before
-    running `pattern` on a page."""
-    return "INSTITUTE WISE PASS%" in text
+ROLL_RE = re.compile(r"\A\d{6}\Z")
+MARKS_RE = re.compile(r"\A\d{3,4}\Z")
+
+HEADER_Y_CUTOFF = 75.0    # table header at y~68; first data row at y~81
+MAX_NAME_DY = 26.0        # ~2 printed lines at this board's ~12pt pitch
+PAGE_MARKER = "Roll No"
+
+
+def page_records_fn(pdf_path, page_num):
+    doc, lock = ct.get_doc_and_lock(pdf_path)
+    with lock:
+        page = doc[page_num - 1]  # fitz is 0-indexed; main.py's pages are 1-indexed
+        if PAGE_MARKER not in page.get_text():
+            return []           # institute-wise summary / front matter
+        words = [
+            (w[0], w[1], w[4]) for w in page.get_text("words")
+            if w[1] >= HEADER_Y_CUTOFF
+        ]
+
+    columns = ct.detect_columns(words, ROLL_RE, MARKS_RE)
+    if not columns:
+        return []
+    columns = [(rx, mx - ct.NAME_X_PAD, mx) for rx, mx in columns]
+    return ct.build_records(words, columns, ROLL_RE, MARKS_RE, MAX_NAME_DY)
 
 
 BOARD_CONFIG = {
     "match_names": ["bahawalpur", "bwp"],
-    "pattern": re.compile(
-        r"(?P<roll_number>\d{6})\s+(?P<name>[A-Z][A-Z\.\s]*?)\s+(?P<marks>\d{3,4})(?=\s|$)"
-    ),
     "fields": ["roll_number", "name", "marks"],
-    "skip_page": _skip_page,   # optional — see base.py contract
+    "page_records_fn": page_records_fn,
+    "cleanup_fn": ct.close_doc,
 }

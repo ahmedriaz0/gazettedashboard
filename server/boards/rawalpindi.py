@@ -1,52 +1,97 @@
-"""
-BISE Rawalpindi gazette format.
+r"""
+BISE Rawalpindi gazette format (SECOND ANNUAL / supplementary).
 
-Sample raw line (via `pdftotext -layout`) — TWO candidates side-by-side
-per physical line, same "columns share a line" situation as Bahawalpur:
+Two candidate columns per page, and this file ships TWO page sizes
+(1008x612 and 1080x792), so the column origins are detected per page
+rather than hardcoded. On a 1080x792 page:
 
-    201879 ZUNJABILA UROOJ      PASS               658     C          201916 MISBAH ALI             CHE-II EC-II MC-I MC-II
-    201880 UME KHADIJA          PASS               502     D          201917 EMAAN KIANI            IMP                 715     C
+    col   roll x0    name x0     STAT x0    MARKS x0    GRD x0
+    left      4.5       63.0       261.0       374.4      423.3
+    right   490.5      549.0       747.0       860.4      909.3
 
-Fields available: roll_number, name, marks. Unlike Faisalabad/Bahawalpur,
-this board prints an explicit status word before the marks — either
-"PASS" or "IMP" (improvement candidates who already passed previously
-and re-sat to raise their score; their marks column is just as real as a
-PASS row's, so both are captured). Failing candidates show a
-space-separated list of failed subject codes instead (e.g. "CHE-I CHE-II
-MC-I") with no status word before a number, so they never match — same
-"only capture rows with real marks" convention as every other board here.
+The STAT cell holds "PASS", "IMP", "FAIL", "NOT-IMP", or a list of failed
+subject codes; MARKS holds the total only when the candidate has one.
 
-Because the status word ("PASS"/"IMP") is required in the pattern, this
-is actually safer than Bahawalpur's plain digit-based approach: there's
-no ambiguity from stray 3-4 digit numbers elsewhere on the line, and the
-regex isn't anchored to line start/end at all, so it naturally picks up
-both columns regardless of how their rows are vertically offset from
-each other (a name column value + status + marks + grade, appearing
-anywhere in the page text, is unambiguously a real candidate row).
+WHY page_records_fn RATHER THAN THE OLD REGEX — this board was the worst
+name corruption of the set. The old pattern's name class was
+`[A-Z\.\-\s]`, and this gazette's subject codes are all-caps with a
+hyphen ("CHE-I", "MC-II", "PHY-II"), as are its status words. Every one of
+those satisfies that class, so the lazy name group ran straight through
+the STAT column and stored them as part of the candidate's name. Real
+rows previously written to the database:
 
-This is a SECOND ANNUAL (supplementary) exam gazette, so most rows are
-failed-subject reappear listings rather than passes — a low PASS/IMP
-ratio per page is expected and correct, not a sign of under-matching.
+    200068  name = "HIFZA FAIL"                          marks = 648
+    200088  name = "UMAMA CHE-I CHE-II MC-I MC-II"       marks = 692
+    201578  name = "GMC-II GS-I GS-II"                   marks = 677
 
-`page_marker` keeps this from ever running against the front-matter
-pass-percentage summary pages (which have no "ROLLNO"/"ROLL NO" table
-header at all).
+The last one has no candidate name in it at all. Measured over the full
+342-page document, 660 of the old parser's 4,474 captures (14.8%) carried
+subject codes or status words inside the name.
 
-Verified on the full 342-page document: 7,344 matches, 0 duplicate roll
-numbers.
+The fix is structural: the name band has to stop at the STAT column, not
+at the marks column. `_coltable.detect_x()` locates STAT from its own
+PASS/FAIL/IMP keywords, so the boundary adapts to both page sizes.
+
+The old docstring claimed "7,344 matches, 0 duplicate roll numbers" on the
+full document; the pattern as committed actually yielded 4,474. Zero
+duplicates was never evidence that the rows were right.
+
+`page_marker` still gates front-matter pass-percentage pages, which have
+no "ROLLNO"/"ROLL NO" table header. Note the header spelling differs
+between the left column ("ROLLNO") and the right ("ROLL NO") depending on
+the print run, so both are accepted.
+
+Measured on 60 sampled pages: 1,287 marks cells, 1,287 records (100%),
+0 duplicate roll numbers, 0 empty names, 0 names containing subject codes
+or status words. Names now run to 6 words
+("SYED MUHAMMAD FAHEEM UL HASSAN SHAH").
 """
 import re
 
+from . import _coltable as ct
+
+ROLL_RE = re.compile(r"\A\d{6}\Z")
+MARKS_RE = re.compile(r"\A\d{3,4}\Z")
+STAT_WORDS = ("PASS", "FAIL", "IMP", "NOT-IMP")
+
+HEADER_Y_CUTOFF = 55.0    # column header sits at y~43, first row at y~66
+MAX_NAME_DY = 20.0        # ~1 continuation line at this board's ~18pt pitch
+PAGE_MARKERS = ("ROLLNO", "ROLL NO")
+
+
+def page_records_fn(pdf_path, page_num):
+    doc, lock = ct.get_doc_and_lock(pdf_path)
+    with lock:
+        page = doc[page_num - 1]  # fitz is 0-indexed; main.py's pages are 1-indexed
+        text = page.get_text()
+        if not any(m in text for m in PAGE_MARKERS):
+            return []
+        words = [
+            (w[0], w[1], w[4]) for w in page.get_text("words")
+            if w[1] >= HEADER_Y_CUTOFF
+        ]
+
+    detected = ct.detect_columns(words, ROLL_RE, MARKS_RE)
+    if not detected:
+        return []
+
+    columns = []
+    for i, (roll_x, marks_x) in enumerate(detected):
+        right = detected[i + 1][0] - ct.NAME_X_PAD if i + 1 < len(detected) else float("inf")
+        # The name band must end at STAT, not at MARKS: everything between
+        # them is failed-subject-code text that reads as a valid name.
+        stat_x = ct.detect_x(
+            [w for w in words if roll_x < w[0] < right],
+            lambda t: t in STAT_WORDS,
+        )
+        columns.append((roll_x, (stat_x or marks_x) - ct.NAME_X_PAD, marks_x))
+
+    return ct.build_records(words, columns, ROLL_RE, MARKS_RE, MAX_NAME_DY)
+
+
 BOARD_CONFIG = {
     "match_names": ["rawalpindi", "pindi"],
-    "pattern": re.compile(
-        r"(?P<roll_number>\d{6})\s+(?P<name>[A-Z][A-Z\.\-\s]*?)\s+(?:PASS|IMP)\s+"
-        r"(?P<marks>\d{3,4})\s+[A-E]\+?"
-    ),
     "fields": ["roll_number", "name", "marks"],
-    # This gazette's own column header uses either "ROLLNO" (first/left
-    # column) or "ROLL NO" (second/right column) depending on the page's
-    # print run — main.py's page_marker check accepts a list and skips
-    # the page only if NONE of the given strings are present.
-    "page_marker": ["ROLLNO", "ROLL NO"],
+    "page_records_fn": page_records_fn,
+    "cleanup_fn": ct.close_doc,
 }
