@@ -57,6 +57,14 @@ get_page_text() at all (this board never touches Poppler):
     text = get_page_text(temp_file_path, page_num)
     ...
 
+NOT WIRED TO boards/ocr.py, deliberately: the grouping above keys on
+PyMuPDF's block_no/line_no, which come from the PDF's own content stream
+and here happen to correspond to real table CELLS. Tesseract's block and
+line numbering is inferred from the rendered image and carries no such
+guarantee, so OCR words cannot be substituted into this algorithm. A
+scanned Sahiwal gazette would need the x-position approach in
+boards/_coltable.py instead, which every other board already uses.
+
 `page_marker: "Roll-No"` (checked on the page's plain get_text(), not
 via PyMuPDF's word list) keeps this from running against the front-
 matter pages, the highest-position merit-list pages, and the ~140-page

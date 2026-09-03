@@ -13,16 +13,44 @@ HOW TO ADD A NEW BOARD:
    silently misplace values when row heights vary (see sahiwal.py) or
    scramble reading order entirely under certain watermarks.
 2. Copy the closest-matching existing module as a template:
-     - lahore.py       — single column, explicit PASS keyword
-     - faisalabad.py   — single column, no status keyword
-     - bahawalpur.py / dgkhan.py / rawalpindi.py — two columns per line
-     - sargodha.py     — needs post-regex filtering -> use `parser`
-     - sahiwal.py       — pdftotext literally can't represent the table
-                          -> use `page_records_fn` (PyMuPDF)
-   Write a regex (or PyMuPDF-based function) that produces
-   roll_number/name/marks/group. See boards/base.py for the full
-   BOARD_CONFIG contract (pattern / page_marker / skip_page / parser /
-   page_records_fn — use only the ones your board actually needs).
+     - multan.py       — the ONLY board still parsed by regex over
+                         `pdftotext -layout` text. Try this shape first;
+                         it is much less code when it works.
+     - faisalabad.py   — coordinate-based, single column, one page size.
+                         The simplest page_records_fn here.
+     - bahawalpur.py   — coordinate-based, two columns, right-aligned marks
+     - lahore.py / sargodha.py — coordinate-based, three columns, names
+                         that WRAP onto extra printed lines
+     - dgkhan.py / rawalpindi.py — coordinate-based, two columns, plus a
+                         result area that has to be excluded from the name
+                         band by its own x (see each docstring)
+     - gujranwala.py / sahiwal.py — coordinate-based with hardcoded
+                         geometry (single, stable page size)
+
+   MOST BOARDS NEED COORDINATES, NOT A REGEX. `pdftotext -layout` flattens
+   a gazette's variable-height rows onto one global text grid, so a taller
+   row (a wrapped name, a multi-line failed-subject list) pushes its own
+   result cell onto the following text line. A regex then binds marks to
+   the WRONG candidate — silently, and producing plausible-looking rows.
+   Every board here that was measured against word coordinates turned out
+   to be doing this. If a board's rows vary in height at all, go straight
+   to boards/_coltable.py, which does the row rebuilding for you: give it
+   the column origins (it can detect them per page) and it returns
+   roll_number/name/marks/group with wrapped names joined.
+
+   See boards/base.py for the full BOARD_CONFIG contract (pattern /
+   page_marker / skip_page / parser / page_records_fn — use only the ones
+   your board actually needs).
+
+   IF THE PAGE HAS NO TEXT LAYER AT ALL (step 1 returns nothing, for a
+   scanned gazette), you do not need a different kind of module: read the
+   words through boards/ocr.py's `page_words(page)` / `page_text(page)`
+   instead of `page.get_text(...)`, exactly as the coordinate boards above
+   already do, and Tesseract fills them in. That path recovers ~96% of
+   candidates with ~99.7% marks accuracy against a text-layer reference;
+   see boards/ocr.py for the measurements and the caveats. A REGEX board
+   cannot rely on it — see boards/multan.py.
+
 3. Add "<newboard>" to `match_names` (lowercase substrings that should
    map an incoming board dropdown value to this module).
 4. Import and register it below, in BOARD_MODULES.
@@ -30,6 +58,13 @@ HOW TO ADD A NEW BOARD:
    pattern/parser/page_records_fn across the WHOLE document (not just
    the sample page) and check for a plausible total record count and
    zero duplicate roll numbers before trusting it against Supabase.
+   Zero duplicates is NOT on its own evidence of correctness — several
+   modules here claimed it while assigning marks to the wrong students.
+   Also check: how many rows come back with an empty name, how many names
+   contain digits, punctuation or subject-code words, and — the one that
+   actually catches row misalignment — spot-check a handful of records
+   against `page.get_text("words")` coordinates rather than against
+   `pdftotext -layout` output, which is what misleads in the first place.
 
 That's it. main.py's upload/search endpoints never need to change —
 only process_page()'s hook-dispatch logic does, and only if a genuinely

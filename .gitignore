@@ -1,2 +1,6 @@
 ﻿__pycache__/
 .impeccable/
+
+# Gazette source PDFs — large binaries, keep them out of git
+*.pdf
+results/
