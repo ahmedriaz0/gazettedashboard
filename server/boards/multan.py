@@ -1,4 +1,4 @@
-"""
+r"""
 BISE Multan gazette format.
 
 Sample raw line (via `pdftotext -layout`) — NOTE: this gazette prints two
@@ -42,13 +42,60 @@ specific matches fail to form at all, so the affected candidate is
 skipped rather than corrupted. This trades ~6 dropped rows out of 87.6k
 for zero corrupted rows — verified by diffing matches with/without the
 cap on the full document.
+
+LINE-BREAK HANDLING (why the name is single-line but the separator is not)
+-------------------------------------------------------------------------
+It is tempting to "fix" wrapped rows by letting the name group span line
+breaks (i.e. `[A-Z\.\s]` instead of `[A-Z\. ]`). Measured against the full
+1043-page gazette, that is wrong on both counts:
+
+  1. Names in this gazette NEVER wrap. Every candidate's name is emitted
+     on one line. What wraps is the Result column (subject-code lists),
+     and — the actual bug — the marks value, which poppler often places
+     one or two lines BELOW its own name when row heights vary:
+
+         100220 RABIA IRSHAD
+
+                                     1138
+
+  2. Letting the name cross "\n" therefore never recovers a real name; it
+     only lets the lazy group backtrack over the blank gutter and stitch
+     TWO candidates together. On a 149-page sample it produced exactly 4
+     such matches, all corrupt, e.g.
+     name='LARAIB\n\n        ASMA TAHIR' — two different students.
+
+So the name class stays single-line (`[A-Z\. ]`) to keep that corruption
+impossible, and the SEPARATOR between name and marks is what was widened
+to cross up to two "\n". Keeping the spaces in the separator (rather than
+in the name class) also matters because it stops leading/trailing padding
+from eating into the 30-char name cap described above.
+
+Measured on the full 1043-page document: 67,408 -> 69,005 distinct rolls
+(+1,597, +2.37%), with zero records changed, zero lost, and zero names
+containing a line break. The change is strictly additive.
+
+Still NOT recovered (known, unfixed — these need coordinate-based parsing
+like sahiwal.py, not a better regex):
+  - Rows where a diagonal watermark injects stray characters between the
+    name and the marks ("100145 IQRA RIAZ  o 758", "100151 KANEEZ FATIMA
+    0 932"). The name class rejects the lowercase/digit noise, so the row
+    is skipped rather than mis-parsed.
+  - Blocks where poppler's reading order drops the roll numbers entirely,
+    leaving bare names and bare marks in separate runs (see page 16).
 """
 import re
 
 BOARD_CONFIG = {
     "match_names": ["multan"],
     "pattern": re.compile(
-        r"(?P<roll_number>\d{6})[ ]+(?P<name>[A-Z][A-Z\. ]{0,29}?)[ ]+(?P<marks>\d{3,4})\b"
+        r"(?P<roll_number>\d{6})[ ]+"
+        # Name stays SINGLE-LINE on purpose — see LINE-BREAK HANDLING above.
+        r"(?P<name>[A-Z][A-Z\. ]{0,29}?)"
+        # Separator, deliberately NOT part of the name: spaces, optionally
+        # crossing up to two line breaks, so a marks value that poppler
+        # pushed onto a later line still binds to its own candidate.
+        r"[ ]*(?:\n[ ]*){0,2}"
+        r"(?P<marks>\d{3,4})\b"
     ),
     "fields": ["roll_number", "name", "marks"],
 }
