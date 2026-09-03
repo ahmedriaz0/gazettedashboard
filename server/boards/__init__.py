@@ -41,6 +41,16 @@ HOW TO ADD A NEW BOARD:
    See boards/base.py for the full BOARD_CONFIG contract (pattern /
    page_marker / skip_page / parser / page_records_fn — use only the ones
    your board actually needs).
+
+   IF THE PAGE HAS NO TEXT LAYER AT ALL (step 1 returns nothing, for a
+   scanned gazette), you do not need a different kind of module: read the
+   words through boards/ocr.py's `page_words(page)` / `page_text(page)`
+   instead of `page.get_text(...)`, exactly as the coordinate boards above
+   already do, and Tesseract fills them in. That path recovers ~96% of
+   candidates with ~99.7% marks accuracy against a text-layer reference;
+   see boards/ocr.py for the measurements and the caveats. A REGEX board
+   cannot rely on it — see boards/multan.py.
+
 3. Add "<newboard>" to `match_names` (lowercase substrings that should
    map an incoming board dropdown value to this module).
 4. Import and register it below, in BOARD_MODULES.

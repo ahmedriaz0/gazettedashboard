@@ -4,9 +4,15 @@ FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-# Install Poppler and clean up apt cache in the same layer to minimize image size
+# Poppler for pdftotext/pdfinfo, Tesseract for the OCR fallback that reads
+# pages with no usable text layer (see boards/ocr.py). tesseract-ocr-eng is
+# the English traineddata; without it tesseract installs but every call fails
+# with "Failed loading language 'eng'". Cleaned up in the same layer to
+# minimize image size.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     poppler-utils \
+    tesseract-ocr \
+    tesseract-ocr-eng \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

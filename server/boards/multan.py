@@ -82,6 +82,15 @@ like sahiwal.py, not a better regex):
     is skipped rather than mis-parsed.
   - Blocks where poppler's reading order drops the roll numbers entirely,
     leaving bare names and bare marks in separate runs (see page 16).
+
+OCR does not rescue either of those, and cannot rescue this board at all
+while it is regex-based: the vertical rule this gazette prints between the
+roll and name columns comes back from Tesseract glued to the roll number
+as a single token ("111882/SIDRA RIAZ"), so the pattern's `\d{6}` followed
+by spaces matches nothing. Measured: 0 records from OCR text against
+73/66/75 from poppler on the same pages. Converting this module to
+coordinates (boards/_coltable.py) is what would fix both the watermark
+rows and OCR support, in one change. See boards/ocr.py.
 """
 import re
 

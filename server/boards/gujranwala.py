@@ -72,6 +72,8 @@ import re
 import threading
 import pymupdf as fitz  # PyMuPDF's import is now `pymupdf`; `fitz` still works but is deprecated
 
+from . import ocr
+
 ROLL_RE = re.compile(r"\A\d{5,7}\Z")
 MARKS_RE = re.compile(r"\A\d{3,4}\Z")
 
@@ -178,9 +180,9 @@ def page_records_fn(pdf_path, page_num):
         page = doc[page_num - 1]  # fitz is 0-indexed; main.py's pages are 1-indexed
         # Cheap page_marker-equivalent: skip front-matter, grading-scale,
         # and institution-wise-stats pages that never had a student table.
-        if "Roll-No" not in page.get_text():
+        if "Roll-No" not in ocr.page_text(page):
             return []
-        words = [(w[0], w[1], w[4]) for w in page.get_text("words")]
+        words = ocr.page_words(page)
 
     left = [w for w in words if w[0] < COLUMN_SPLIT_X]
     right = [w for w in words if w[0] >= COLUMN_SPLIT_X]

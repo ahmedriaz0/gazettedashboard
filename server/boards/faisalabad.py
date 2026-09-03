@@ -39,6 +39,7 @@ punctuation or header/subject-code words. Hyphenated names such as
 import re
 
 from . import _coltable as ct
+from . import ocr
 
 ROLL_RE = re.compile(r"\A\d{6}\Z")
 MARKS_RE = re.compile(r"\A\d{3,4}\Z")
@@ -52,12 +53,9 @@ def page_records_fn(pdf_path, page_num):
     doc, lock = ct.get_doc_and_lock(pdf_path)
     with lock:
         page = doc[page_num - 1]  # fitz is 0-indexed; main.py's pages are 1-indexed
-        if PAGE_MARKER not in page.get_text():
+        if PAGE_MARKER not in ocr.page_text(page):
             return []           # summary / front-matter page, not a gazette page
-        words = [
-            (w[0], w[1], w[4]) for w in page.get_text("words")
-            if w[1] >= HEADER_Y_CUTOFF
-        ]
+        words = [w for w in ocr.page_words(page) if w[1] >= HEADER_Y_CUTOFF]
 
     columns = ct.detect_columns(words, ROLL_RE, MARKS_RE)
     if not columns:

@@ -91,6 +91,8 @@ import threading
 
 import pymupdf as fitz  # PyMuPDF's import is now `pymupdf`; `fitz` still works but is deprecated
 
+from . import ocr
+
 ROLL_RE = re.compile(r"\A\d{6}\Z")
 PASS_RE = re.compile(r"\bPASS\s+(\d{3,4})\b")
 
@@ -195,10 +197,7 @@ def page_records_fn(pdf_path, page_num):
     doc, lock = _get_doc_and_lock(pdf_path)
     with lock:
         page = doc[page_num - 1]  # fitz is 0-indexed; main.py's pages are 1-indexed
-        words = [
-            (w[0], w[1], w[4]) for w in page.get_text("words")
-            if w[1] >= HEADER_Y_CUTOFF
-        ]
+        words = [w for w in ocr.page_words(page) if w[1] >= HEADER_Y_CUTOFF]
 
     records = []
     for roll_x, dob_x in COLUMNS:

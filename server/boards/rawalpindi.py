@@ -49,6 +49,7 @@ or status words. Names now run to 6 words
 import re
 
 from . import _coltable as ct
+from . import ocr
 
 ROLL_RE = re.compile(r"\A\d{6}\Z")
 MARKS_RE = re.compile(r"\A\d{3,4}\Z")
@@ -63,13 +64,10 @@ def page_records_fn(pdf_path, page_num):
     doc, lock = ct.get_doc_and_lock(pdf_path)
     with lock:
         page = doc[page_num - 1]  # fitz is 0-indexed; main.py's pages are 1-indexed
-        text = page.get_text()
+        text = ocr.page_text(page)
         if not any(m in text for m in PAGE_MARKERS):
             return []
-        words = [
-            (w[0], w[1], w[4]) for w in page.get_text("words")
-            if w[1] >= HEADER_Y_CUTOFF
-        ]
+        words = [w for w in ocr.page_words(page) if w[1] >= HEADER_Y_CUTOFF]
 
     detected = ct.detect_columns(words, ROLL_RE, MARKS_RE)
     if not detected:

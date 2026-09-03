@@ -7,7 +7,7 @@ This repository contains a full-stack web application designed to process, extra
 * **Frontend:** React (Vite SPA) hosted on **Vercel**.
 * **Backend:** Python FastAPI deployed via **Docker** on **Render**.
 * **Database:** **Supabase** (PostgreSQL) storing parsed student records in `public.student_results`.
-* **PDF Engine:** Poppler CLI utilities (`pdftotext`, `pdfinfo`) executed in streaming sub-processes for low-memory layout preservation.
+* **PDF Engine:** Poppler CLI utilities (`pdftotext`, `pdfinfo`) executed in streaming sub-processes for low-memory layout preservation, PyMuPDF for word coordinates (which is what most board parsers actually use), and Tesseract OCR as the fallback for pages with no usable text layer.
 
 ---
 
@@ -70,6 +70,18 @@ PDFTOTEXT_BIN = "pdftotext" if shutil.which("pdftotext") else os.path.join(POPPL
 
 * Batch database insertions in chunks of 500 records to prevent Supabase payload timeout errors.
 * Always clean up temporary files in `temp_uploads/` using a `finally` block.
+* Most boards do NOT parse Poppler text at all — they read word coordinates via PyMuPDF and rebuild
+  rows in `server/boards/_coltable.py`. Read `server/boards/__init__.py` before adding or changing a
+  board parser; it explains why, and which existing module to copy.
+* OCR fallback (`server/boards/ocr.py`): a page whose text layer is empty is rendered and read with
+  Tesseract, returning the same `(x0, y0, text)` word triples the coordinate parsers already expect.
+  Controlled by `OCR_MODE` (`auto` default / `off` / `force`), plus `OCR_DPI`, `OCR_PSM`, `OCR_LANG`,
+  `OCR_MIN_CONF`. `auto` changes nothing for a page that has a text layer — verified word-for-word
+  identical on every gazette wired to it. `force` OCRs every page and costs ~1s of CPU per page; it is for
+  documents whose text layer is present but wrong, not for routine use.
+* The Docker image must install `tesseract-ocr` and `tesseract-ocr-eng` alongside `poppler-utils`.
+  On Windows, Tesseract is found automatically at the UB-Mannheim installer's default location;
+  override with `TESSERACT_BIN` or `TESSERACT_BIN_DIR`.
 
 ### 3. Frontend Standards (`client/`)
 
@@ -116,7 +128,7 @@ npm run dev
 * **Render (Backend):**
 * Environment: `Docker`
 * Root Directory: `server`
-* Dockerfile must include `apt-get install -y --no-install-recommends poppler-utils`.
+* Dockerfile must include `apt-get install -y --no-install-recommends poppler-utils tesseract-ocr tesseract-ocr-eng`.
 
 
 

@@ -11,6 +11,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from supabase import create_client, Client
 
 from boards import resolve_board
+from boards import ocr
+from boards import _coltable
 
 app = FastAPI(title="BISE Gazette Universal Parser & Search API")
 
@@ -95,20 +97,50 @@ PDFTOTEXT_BIN = "pdftotext" if shutil.which("pdftotext") else (
 
 
 def get_page_count(pdf_path: str) -> int:
+    """Page count via pdfinfo, falling back to MuPDF.
+
+    The fallback is not belt-and-braces: poppler refuses some of these
+    files outright ("Couldn't find trailer dictionary" on an AES-256
+    encrypted gazette, even one whose permissions allow reading), and
+    without it the job dies here — before any board, OCR included, gets a
+    chance at a single page. MuPDF opens those files, and it is already a
+    dependency of every coordinate board.
+    """
     try:
         result = subprocess.run(
             [PDFINFO_BIN, pdf_path],
             capture_output=True,
             encoding="utf-8",
             errors="replace",
-            check=True,
         )
-        for line in result.stdout.splitlines():
-            if line.startswith("Pages:"):
-                return int(line.split(":")[1].strip())
-        raise RuntimeError("Could not determine page count from PDF output.")
+        if result.returncode == 0:
+            for line in (result.stdout or "").splitlines():
+                if line.startswith("Pages:"):
+                    return int(line.split(":")[1].strip())
     except FileNotFoundError:
-        raise RuntimeError(f"Poppler executable '{PDFINFO_BIN}' not found. Verify Poppler installation path.")
+        pass  # no poppler on this host; MuPDF below
+
+    try:
+        doc, lock = _coltable.get_doc_and_lock(pdf_path)
+        with lock:
+            page_count = doc.page_count
+    except Exception as e:
+        raise RuntimeError(
+            f"Could not determine page count for this PDF "
+            f"(pdfinfo '{PDFINFO_BIN}' and MuPDF both failed: {e})"
+        )
+
+    # MuPDF opens a truncated/corrupt file and reports 0 pages rather than
+    # raising (results/sahiwal.pdf, a half-finished download, does exactly
+    # this). Returning 0 here would let the job run to "complete" having
+    # parsed nothing, which reads as "this gazette had no candidates"
+    # instead of "this file is broken".
+    if page_count < 1:
+        raise RuntimeError(
+            "This PDF reports 0 pages — it is corrupt or was not fully "
+            "uploaded. Re-upload the file."
+        )
+    return page_count
 
 
 def get_page_text(pdf_path: str, page_num: int) -> str:
@@ -129,7 +161,18 @@ def get_page_text(pdf_path: str, page_num: int) -> str:
     degrades gracefully (one garbled character) instead of crashing the
     whole page's extraction. Also defensively coalesce None -> "" in
     case any other library/version quirk slips one through.
+
+    OCR: an empty result here means poppler found no text layer for this
+    page — a scanned page, or one this PDF's encryption keeps poppler out
+    of. Under OCR_MODE=auto (the default) boards/ocr.py then rebuilds the
+    page from the rendered image with Tesseract, in the same
+    `-layout`-style column spacing the regex boards expect; under
+    OCR_MODE=force poppler is skipped entirely. See boards/ocr.py.
     """
+    if ocr.forced():
+        return ocr.page_text_for_pdf(pdf_path, page_num)
+
+    text = ""
     try:
         result = subprocess.run(
             [PDFTOTEXT_BIN, "-f", str(page_num), "-l", str(page_num), "-layout", pdf_path, "-"],
@@ -137,11 +180,14 @@ def get_page_text(pdf_path: str, page_num: int) -> str:
             encoding="utf-8",
             errors="replace",
         )
-        if result.returncode != 0:
-            return ""
-        return result.stdout or ""
+        if result.returncode == 0:
+            text = result.stdout or ""
     except Exception:
-        return ""
+        text = ""
+
+    if not text.strip() and ocr.enabled():
+        return ocr.page_text_for_pdf(pdf_path, page_num)
+    return text
 
 
 def _page_marker_present(page_marker, text: str) -> bool:
@@ -274,6 +320,15 @@ def _run_parse_job_sync(job_id: str, temp_file_path: str, board: str, class_num:
                 cleanup_fn(temp_file_path)
             except Exception as cleanup_err:
                 print(f"[!] cleanup_fn failed (non-fatal): {cleanup_err}")
+
+        # The regex boards (boards/multan.py, boards/generic.py) declare no
+        # cleanup_fn because they never opened the PDF themselves — but OCR
+        # does, on their behalf, for any page with no text layer. No-op when
+        # nothing was cached.
+        try:
+            _coltable.close_doc(temp_file_path)
+        except Exception as doc_cleanup_err:
+            print(f"[!] _coltable.close_doc failed (non-fatal): {doc_cleanup_err}")
 
         try:
             if os.path.exists(temp_file_path):
